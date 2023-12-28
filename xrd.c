@@ -5,8 +5,7 @@
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
 #include <linux/idr.h>
-#include <linux/string.h>
-#include <linux/ctype.h>
+#include <linux/io.h>
 
 struct xram_dev_t {
 	sector_t capacity;
@@ -74,7 +73,6 @@ static const struct block_device_operations xram_rq_ops = {
 
 static int xrd_alloc(void)
 {
-	loff_t data_size_bytes = size;
 	struct gendisk *disk;
 	int minor, ret;
 
@@ -85,10 +83,10 @@ static int xrd_alloc(void)
 		return -ENOMEM;
 	}
 
-	xram_dev->capacity = data_size_bytes >> SECTOR_SHIFT;
-	xram_dev->data = kvmalloc(data_size_bytes, GFP_KERNEL);
+	xram_dev->capacity = size >> SECTOR_SHIFT;
+	xram_dev->data = memremap(address, size, MEMREMAP_WB);
 	if (xram_dev->data == NULL) {
-		pr_err("failed to allocate memory for the RAM disk.\n");
+		pr_err("failed to memremap.\n");
 		ret = -ENOMEM;
 		goto data_err;
 	}
@@ -157,6 +155,8 @@ static void xrd_del(void)
 		del_gendisk(xram_dev->disk);
 		put_disk(xram_dev->disk);
 	}
+
+	memunmap(xram_dev->data);
 
 	kfree(xram_dev);
 }
