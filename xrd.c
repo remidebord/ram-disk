@@ -16,6 +16,8 @@ struct xram_dev_t {
 };
 
 static int major;
+static unsigned long address;
+static unsigned long size;
 static struct xram_dev_t *xram_dev = NULL;
 
 /*
@@ -70,26 +72,17 @@ static const struct block_device_operations xram_rq_ops = {
 	.owner = THIS_MODULE,
 };
 
-static int xrd_alloc(struct device* dev, int i, unsigned long maddr, unsigned long msize)
+static int xrd_alloc(void)
 {
-	loff_t data_size_bytes = msize << 20;
+	loff_t data_size_bytes = size;
 	struct gendisk *disk;
 	int minor, ret;
-
-	if (!major) {
-		ret = register_blkdev(0, "xram");
-		if (ret < 0)
-			return ret;
-
-		major = ret;
-	}
 
 	xram_dev = kzalloc(sizeof(struct xram_dev_t), GFP_KERNEL);
 
 	if (xram_dev == NULL) {
 		pr_err("failed to allocate memory for xram_dev.\n");
-		ret = -ENOMEM;
-		goto unregister_blkdev;
+		return -ENOMEM;
 	}
 
 	xram_dev->capacity = data_size_bytes >> SECTOR_SHIFT;
@@ -145,7 +138,7 @@ static int xrd_alloc(struct device* dev, int i, unsigned long maddr, unsigned lo
 
 	add_disk(disk);
 
-	dev_info(dev, "disk %s created.\n", disk->disk_name);
+	pr_info("RAM disk %s created.\n", disk->disk_name);
 	return 0;
 
 queue_err:
@@ -154,8 +147,6 @@ tagset_err:
 	kfree(xram_dev->data);
 data_err:
 	kfree(xram_dev);
-unregister_blkdev:
-	unregister_blkdev(major, "xram");
 
 	return ret;
 }
@@ -167,92 +158,66 @@ static void xrd_del(void)
 		put_disk(xram_dev->disk);
 	}
 
-	unregister_blkdev(major, "xram");
 	kfree(xram_dev);
 }
 
 /*
- * Char device operations
+ * Parameters
  */
 
-static ssize_t xrd_write(struct file *file, const char __user *user_buffer, size_t size, loff_t * offset)
+static int xrd_set_parameter(const char *val, const struct kernel_param *kp)
 {
-	struct miscdevice *misc = (struct miscdevice *) file->private_data;
-	unsigned long maddr, msize;
-	char buffer[32];
-	ssize_t len, i;
-	int error;
-	char *p;
+	int ret = 0;
 
-	len = min(sizeof(buffer), size);
+	ret = param_set_ulong(val, kp);
+	if (ret < 0)
+		return ret;
 
-	if (len <= 0)
-		return 0;
+	if ((address != 0) && (size != 0)) {
+		pr_info("create RAM disk... (address: 0x%08x, size: %lu).\n", address, size);
 
-	if (copy_from_user(buffer, user_buffer, len))
-		return -EFAULT;
+		if (xram_dev)
+			return -EEXIST;
 
-	for (i = 0; i < len; i++) {
-		if (isspace(buffer[i]))
-			buffer[i] = 0x00;
+		ret = xrd_alloc();
+		address = 0;
+		size = 0;
 	}
 
-	error = kstrtoul(buffer, 0, &maddr);
-	if (error)
-		return error;
-
-	dev_info(misc->this_device, "address: 0x%08lx.\n", maddr);
-
-	if (len <= (strlen(buffer) + 1)) {
-		dev_info(misc->this_device, "no size to parse.\n");
-		return -EINVAL;
-	}
-
-	p = &buffer[0] + (strlen(buffer) + 1);
-
-	error = kstrtoul(p, 0, &msize);
-	if (error)
-		return error;
-
-	dev_info(misc->this_device, "size: %lu.\n", msize);
-
-    return len;
+	return 0;
 }
 
-const struct file_operations xrd_fops = {
-	.owner = THIS_MODULE,
-	.write = xrd_write,
-	.llseek = no_llseek,
+static const struct kernel_param_ops param_ops = {
+	.set = xrd_set_parameter,
 };
 
-struct miscdevice xrd_device = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = "xrd",
-	.fops = &xrd_fops,
-};
+module_param_cb(address, &param_ops, &address, 0644);
+module_param_cb(size, &param_ops, &size, 0644);
+MODULE_PARM_DESC(address, "RAM address.\n");
+MODULE_PARM_DESC(size, "Disk size in bytes.\n");
 
 static int __init xrd_init(void)
 {
-	int error;
+	int ret;
 
-	major = 0;
+	ret = register_blkdev(0, "xramdisk");
+	if (ret < 0)
+		return ret;
 
-	error = misc_register(&xrd_device);
-	if (error) {
-		pr_err("misc register failed.\n");
-		return error;
-	}
+	major = ret;
 
-	xrd_alloc(xrd_device.this_device, 0, 0, 10);
+	pr_info("loaded.\n");
 
 	return 0;
 }
 
 static void __exit xrd_exit(void)
 {
-	xrd_del();
+	unregister_blkdev(major, "xramdisk");
 
-	misc_deregister(&xrd_device);
+	if (xram_dev)
+		xrd_del();
+
 	pr_info("unloaded.\n");
 }
  
