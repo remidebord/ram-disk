@@ -73,6 +73,7 @@ dtc -I dts -O dtb -o qemu.dtb qemu.dts
 ```
 
 When your device is up, we can check if the range is reserved.
+```
 qemuarm64 login: root
 root@qemuarm64:~# cat /proc/iomem
 09000000-09000fff : pl011@9000000
