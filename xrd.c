@@ -7,31 +7,48 @@
 #include <linux/idr.h>
 #include <linux/io.h>
 
-struct xram_dev_t {
-	sector_t capacity;
+#define DISK_MAX_PARTS 256
+
+struct xrd_device {
+	unsigned long address;
+	unsigned long size;
+	int minor;
 	u8 *data;
+	sector_t capacity;
 	struct blk_mq_tag_set tag_set;
 	struct gendisk *disk;
+	struct list_head xrd_list;
+
 };
 
 static int major;
 static unsigned long address;
 static unsigned long size;
-static struct xram_dev_t *xram_dev = NULL;
+static LIST_HEAD(xrd_devices);
+
+static inline bool overlap(void *addr, unsigned long len, void *start, void *end)
+{
+	unsigned long a1 = (unsigned long)addr;
+	unsigned long b1 = a1 + len;
+	unsigned long a2 = (unsigned long)start;
+	unsigned long b2 = (unsigned long)end;
+
+	return !(b1 <= a2 || a1 >= b2);
+}
 
 /*
  * Block device operations
  */
 
-static blk_status_t xram_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
+static blk_status_t xrd_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_mq_queue_data *bd)
 {
 	struct request *rq = bd->rq;
 	blk_status_t err = BLK_STS_OK;
 	struct bio_vec bv;
 	struct req_iterator iter;
 	loff_t pos = blk_rq_pos(rq) << SECTOR_SHIFT;
-	struct xram_dev_t *xram = hctx->queue->queuedata;
-	loff_t data_len = (xram->capacity << SECTOR_SHIFT);
+	struct xrd_device *xrd = hctx->queue->queuedata;
+	loff_t data_len = (xrd->capacity << SECTOR_SHIFT);
 
 	blk_mq_start_request(rq);
 
@@ -46,10 +63,10 @@ static blk_status_t xram_queue_rq(struct blk_mq_hw_ctx *hctx, const struct blk_m
 
 		switch (req_op(rq)) {
 		case REQ_OP_READ:
-			memcpy(buf, xram->data + pos, len);
+			memcpy(buf, xrd->data + pos, len);
 			break;
 		case REQ_OP_WRITE:
-			memcpy(xram->data + pos, buf, len);
+			memcpy(xrd->data + pos, buf, len);
 			break;
 		default:
 			err = BLK_STS_IOERR;
@@ -63,48 +80,63 @@ end_request:
 	return BLK_STS_OK;
 }
 
-static const struct blk_mq_ops xram_mq_ops = {
-	.queue_rq = xram_queue_rq,
+static const struct blk_mq_ops xrd_mq_ops = {
+	.queue_rq = xrd_queue_rq,
 };
 
-static const struct block_device_operations xram_rq_ops = {
+static const struct block_device_operations xrd_rq_ops = {
 	.owner = THIS_MODULE,
 };
 
 static int xrd_alloc(void)
 {
+	struct xrd_device *xrd, *next;
 	struct gendisk *disk;
 	int minor, ret;
 
-	xram_dev = kzalloc(sizeof(struct xram_dev_t), GFP_KERNEL);
+	minor = 0;
 
-	if (xram_dev == NULL) {
-		pr_err("failed to allocate memory for xram_dev.\n");
+	list_for_each_entry_safe(xrd, next, &xrd_devices, xrd_list) {
+		if (overlap((void*)address, size, (void*)xrd->address, (void*)(xrd->address + xrd->size))) {
+			pr_err("overlap with %s.\n", xrd->disk->disk_name);
+			return -EEXIST;
+		}
+
+		minor++;
+	}
+
+	xrd = kzalloc(sizeof(struct xrd_device), GFP_KERNEL);
+
+	if (xrd == NULL) {
+		pr_err("failed to allocate memory for xrd.\n");
 		return -ENOMEM;
 	}
 
-	xram_dev->capacity = size >> SECTOR_SHIFT;
-	xram_dev->data = memremap(address, size, MEMREMAP_WB);
-	if (xram_dev->data == NULL) {
+	xrd->address = address;
+	xrd->size = size;
+
+	xrd->capacity = size >> SECTOR_SHIFT;
+	xrd->data = memremap(address, size, MEMREMAP_WB);
+	if (xrd->data == NULL) {
 		pr_err("failed to memremap.\n");
 		ret = -ENOMEM;
 		goto data_err;
 	}
 
-	memset(&xram_dev->tag_set, 0, sizeof(xram_dev->tag_set));
-	xram_dev->tag_set.ops = &xram_mq_ops;
-	xram_dev->tag_set.queue_depth = 128;
-	xram_dev->tag_set.numa_node = NUMA_NO_NODE;
-	xram_dev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
-	xram_dev->tag_set.cmd_size = 0;
-	xram_dev->tag_set.driver_data = xram_dev;
-	xram_dev->tag_set.nr_hw_queues = 1;
+	memset(&xrd->tag_set, 0, sizeof(xrd->tag_set));
+	xrd->tag_set.ops = &xrd_mq_ops;
+	xrd->tag_set.queue_depth = 128;
+	xrd->tag_set.numa_node = NUMA_NO_NODE;
+	xrd->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
+	xrd->tag_set.cmd_size = 0;
+	xrd->tag_set.driver_data = xrd;
+	xrd->tag_set.nr_hw_queues = 1;
 
-	ret = blk_mq_alloc_tag_set(&xram_dev->tag_set);
+	ret = blk_mq_alloc_tag_set(&xrd->tag_set);
 	if (ret)
 		goto tagset_err;
 
-	//disk = blk_mq_alloc_disk(&xram_dev->tag_set, xram_dev);
+	//disk = blk_mq_alloc_disk(&xrd->tag_set, xrd);
 
 	disk = alloc_disk(1);
 	if (!disk) {
@@ -112,13 +144,13 @@ static int xrd_alloc(void)
 		goto tagset_err;
 	}
 
-	disk->queue = blk_mq_init_queue_data(&xram_dev->tag_set, xram_dev);
+	disk->queue = blk_mq_init_queue_data(&xrd->tag_set, xrd);
 	if (IS_ERR(disk->queue)) {
 		ret = PTR_ERR(disk->queue);
 		goto queue_err;
 	}
 
-	xram_dev->disk = disk;
+	xrd->disk = disk;
 
 	blk_queue_logical_block_size(disk->queue, PAGE_SIZE);
 	blk_queue_physical_block_size(disk->queue, PAGE_SIZE);
@@ -128,13 +160,15 @@ static int xrd_alloc(void)
 	snprintf(disk->disk_name, DISK_NAME_LEN, "xram%d", minor);
 
 	disk->major = major;
-	disk->first_minor = 0;
-	disk->minors = 1;	
-	disk->fops = &xram_rq_ops;
+	disk->first_minor = minor * DISK_MAX_PARTS;
+	disk->minors = DISK_MAX_PARTS;
+	disk->fops = &xrd_rq_ops;
 	disk->flags = 0;
-	set_capacity(disk, xram_dev->capacity);
+	set_capacity(disk, xrd->capacity);
 
 	add_disk(disk);
+
+	list_add_tail(&xrd->xrd_list, &xrd_devices);
 
 	pr_info("RAM disk %s created.\n", disk->disk_name);
 	return 0;
@@ -142,23 +176,20 @@ static int xrd_alloc(void)
 queue_err:
 	put_disk(disk);
 tagset_err:
-	kfree(xram_dev->data);
+	kfree(xrd->data);
 data_err:
-	kfree(xram_dev);
+	kfree(xrd);
 
 	return ret;
 }
 
-static void xrd_del(void)
+static void xrd_del(struct xrd_device *xrd)
 {
-	if (xram_dev->disk) {
-		del_gendisk(xram_dev->disk);
-		put_disk(xram_dev->disk);
-	}
-
-	memunmap(xram_dev->data);
-
-	kfree(xram_dev);
+	list_del(&xrd->xrd_list);
+	del_gendisk(xrd->disk);
+	put_disk(xrd->disk);
+	memunmap(xrd->data);
+	kfree(xrd);
 }
 
 /*
@@ -176,15 +207,15 @@ static int xrd_set_parameter(const char *val, const struct kernel_param *kp)
 	if ((address != 0) && (size != 0)) {
 		pr_info("create RAM disk... (address: 0x%08lx, size: %lu).\n", address, size);
 
-		if (xram_dev)
-			return -EEXIST;
-
 		ret = xrd_alloc();
+		if (ret)
+			pr_err("failed to create RAM disk... (%d).\n", ret);
+
 		address = 0;
 		size = 0;
 	}
 
-	return 0;
+	return ret;
 }
 
 static const struct kernel_param_ops param_ops = {
@@ -213,10 +244,12 @@ static int __init xrd_init(void)
 
 static void __exit xrd_exit(void)
 {
+	struct xrd_device *xrd, *next;
+
 	unregister_blkdev(major, "xramdisk");
 
-	if (xram_dev)
-		xrd_del();
+	list_for_each_entry_safe(xrd, next, &xrd_devices, xrd_list)
+		xrd_del(xrd);
 
 	pr_info("unloaded.\n");
 }

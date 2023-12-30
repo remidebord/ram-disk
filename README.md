@@ -46,12 +46,12 @@ hello
 ### Device tree
 
 Convert your dtb to dts.
-```
+```bash
 dtc -I dtb -O dts -o qemu.dts qemu.dtb
 ```
 
 Add a range in reserved-memory node (ex: xramdisk):
-```
+```c
     memory@40000000 {
         reg = <0x00 0x40000000 0x00 0x20000000>;
         device_type = "memory";
@@ -72,12 +72,12 @@ Add a range in reserved-memory node (ex: xramdisk):
 Here we reserve 32M starting from 0x50000000 in available RAM memory (512M starting at 0x40000000).
 
 Convert your dts to dtb.
-```
+```bash
 dtc -I dts -O dtb -o qemu.dtb qemu.dts
 ```
 
 When your device is up, we can check if the range is reserved.
-```
+```bash
 qemuarm64 login: root
 root@qemuarm64:~# cat /proc/iomem
 09000000-09000fff : pl011@9000000
@@ -116,7 +116,7 @@ root@qemuarm64:~# cat /proc/iomem
 ### Generate and use a device tree with QEMU (optional)
 
 Add `-machine dumpdtb=qemu.dtb` to your QEMU command, ex:
-```
+```bash
 /home/red/distribution/hardknott/poky/build/tmp/work/x86_64-linux/qemu-helper-native/1.0-r1/recipe-sysroot-native/usr/bin/qemu-system-aarch64 \
 -device virtio-net-pci,netdev=net0,mac=A4:B1:B1:03:A2:AF \
 -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::2223-:23 \
@@ -134,7 +134,7 @@ Add `-machine dumpdtb=qemu.dtb` to your QEMU command, ex:
 
 > remark: .dtb generated cannot be loaded by QEMU, you will need to convert it to dts, adn convert it back to dtb...
 
-```
+```bash
 # Convert dtb to dts
 dtc -I dtb -O dts -o qemu.dts qemu.dtb
 
@@ -143,7 +143,7 @@ dtc -I dts -O dtb -o qemu.dtb qemu.dts
 ```
 
 Once the conversion is done, load the device tree by adding `-dtb ./files/qemu.dtb` to your QEMU command, ex:
-```
+```bash
 /home/red/distribution/hardknott/poky/build/tmp/work/x86_64-linux/qemu-helper-native/1.0-r1/recipe-sysroot-native/usr/bin/qemu-system-aarch64 \
 -device virtio-net-pci,netdev=net0,mac=A4:B1:B1:03:A2:AF \
 -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::2223-:23 \
@@ -161,7 +161,7 @@ Once the conversion is done, load the device tree by adding `-dtb ./files/qemu.d
 
 ## TODO
 
-- Support multiple disks.
+- complete README.
 
 ## References
 
