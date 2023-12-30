@@ -174,7 +174,7 @@ static int xrd_set_parameter(const char *val, const struct kernel_param *kp)
 		return ret;
 
 	if ((address != 0) && (size != 0)) {
-		pr_info("create RAM disk... (address: 0x%08x, size: %lu).\n", address, size);
+		pr_info("create RAM disk... (address: 0x%08lx, size: %lu).\n", address, size);
 
 		if (xram_dev)
 			return -EEXIST;
