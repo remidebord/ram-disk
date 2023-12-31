@@ -8,6 +8,7 @@ Remarks:
 - Two RAM disks cannot use the same memory region (overlap).
 - A RAM disk created cannot be removed, unless the driver is unloaded.
 - RAM disk content is not erased at driver unload, so it means that you could retrieve the content after a warm reboot (as long the fsbl or uboot does not perform fancy operations in RAM).
+- Tested on Linux kernel version 5.10.107 (Hardknott).
 
 ## Usage
 
