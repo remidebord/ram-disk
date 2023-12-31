@@ -1,6 +1,13 @@
 # The forbidden RAM disk 
 
-TODO.
+The RAM disk driver is a way to use system memory as a block device. Instead of allocating memory, this driver allows a user to dynamically create RAM disk(s) in specific location(s) via the parameters `address` and `size`.
+
+Remarks:
+- If you are using this driver, you know what you are doing and you should at least reserve the memory that will be used in the device tree, else the operating system can behave abnormally and crash.
+- There is no limitations about how many disks can be created, so be careful.
+- Two RAM disks cannot use the same memory region (overlap).
+- A RAM disk created cannot be removed, unless the driver is unloaded.
+- RAM disk content is not erased at driver unload, so it means that you could retrieve the content after a warm reboot (as long the fsbl or uboot does not perform fancy operations in RAM).
 
 ## Usage
 
@@ -158,10 +165,6 @@ Once the conversion is done, load the device tree by adding `-dtb ./files/qemu.d
 -nographic \
 -dtb ./files/qemu.dtb
 ```
-
-## TODO
-
-- complete README.
 
 ## References
 
